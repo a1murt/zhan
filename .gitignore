@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+venv/
+.env
+
+# Data & models
+data/raw/
+checkpoints/
+*.pt
+*.pth
+
+# Logs
+*.log
+
+# Node.js
+node_modules/
+frontend/.next/
+frontend/.env.local
+
+# IDE
+.vscode/
+.idea/
+
+# Claude
+.claude/

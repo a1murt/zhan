@@ -1,0 +1,16 @@
+[Unit]
+Description=ZhanAI FastAPI (ODIR myopia)
+After=network.target
+
+[Service]
+Type=simple
+User=administrator
+Group=administrator
+WorkingDirectory=/var/www/zhan-ai
+Environment="PATH=/var/www/zhan-ai/venv/bin:/usr/local/bin:/usr/bin"
+ExecStart=/var/www/zhan-ai/venv/bin/uvicorn src.api.odir_api:app --host 127.0.0.1 --port 8050
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

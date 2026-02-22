@@ -1,0 +1,24 @@
+# Core deep learning
+torch>=2.2.0
+torchvision>=0.17.0
+timm>=0.9.16
+
+# API framework
+fastapi>=0.110.0
+uvicorn[standard]>=0.28.0
+python-multipart>=0.0.9
+pydantic>=2.6.0
+
+# Image processing & augmentation
+albumentations>=1.4.0
+opencv-python-headless>=4.9.0
+Pillow>=10.2.0
+
+# Data science
+numpy>=1.26.0
+pandas>=2.2.0
+scikit-learn>=1.4.0
+
+# Visualisation (metrics logging)
+matplotlib>=3.8.0
+seaborn>=0.13.0

@@ -1,0 +1,17 @@
+[Unit]
+Description=ZhanAI Next.js frontend
+After=network.target
+
+[Service]
+Type=simple
+User=administrator
+Group=administrator
+WorkingDirectory=/var/www/zhan-ai/frontend
+Environment="NODE_ENV=production"
+Environment="PORT=3060"
+ExecStart=/usr/bin/npm run start
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
