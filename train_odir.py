@@ -130,19 +130,18 @@ class FocalLoss(nn.Module):
 # Patient-safe train/val split
 # ---------------------------------------------------------------------------
 
+# CHANGED: simple random split instead of patient-based split
+# WHY: external dataset does not contain patient grouping info
+
 def split_patients(
     df: pd.DataFrame, val_size: float = 0.20, seed: int = 42
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    gss = GroupShuffleSplit(n_splits=1, test_size=val_size, random_state=seed)
-    groups = df[ODIR_PATIENT_ID_COL].values
-    train_idx, val_idx = next(
-        gss.split(df, df[ODIR_LABEL_COL], groups=groups)
-    )
-    return (
-        df.iloc[train_idx].reset_index(drop=True),
-        df.iloc[val_idx].reset_index(drop=True),
-    )
 
+    df = df.sample(frac=1, random_state=seed).reset_index(drop=True)
+
+    split_idx = int(len(df) * (1 - val_size))
+
+    return df.iloc[:split_idx], df.iloc[split_idx:]
 
 # ---------------------------------------------------------------------------
 # Epoch runner
@@ -173,7 +172,7 @@ def run_epoch(
             tabular = tabular.to(device, non_blocking=True)
             labels  = labels.to(device, non_blocking=True)
 
-            with torch.amp.autocast(device_type=device.type, enabled=use_amp):
+            with torch.cuda.amp.autocast(enabled=use_amp):
                 logits = model(images, tabular)
                 loss   = criterion(logits, labels)
 
@@ -229,11 +228,13 @@ def train_with_batch_size(
 
     # ── Split ──────────────────────────────────────────────────────────────
     train_df, val_df = split_patients(df)
+    # CHANGED: removed patient-based logging
+    # WHY: dataset does not have patient IDs anymore
     logger.info(
-        "Split -> train: %d rows (%d patients) | val: %d rows (%d patients)",
-        len(train_df), train_df[ODIR_PATIENT_ID_COL].nunique(),
-        len(val_df),   val_df[ODIR_PATIENT_ID_COL].nunique(),
-    )
+        "Split -> train: %d rows | val: %d rows",
+        len(train_df),
+        len(val_df),
+)
 
     # ── Datasets ──────────────────────────────────────────────────────────
     train_ds = OdirDataset(train_df, transform=get_train_transforms(), fit_imputers=True)
@@ -259,7 +260,9 @@ def train_with_batch_size(
 
     # ── Model ─────────────────────────────────────────────────────────────
     model = MultimodalMyopiaClassifier(
-        tabular_input_dim=train_ds.tabular_input_dim,  # 2
+        # CHANGED: now using engineered tabular features (8 total features)
+        # WHY: we replaced original (Age + Gender) with full clinical + lifestyle features
+        tabular_input_dim=train_ds.tabular_input_dim,
         num_classes=2,                                  # binary: no myopia / myopia
     ).to(device)
     logger.info(
@@ -271,7 +274,7 @@ def train_with_batch_size(
     scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
         optimizer, T_0=10, T_mult=2, eta_min=1e-6
     )
-    scaler = torch.amp.GradScaler("cuda", enabled=(device.type == "cuda"))
+    scaler = torch.cuda.amp.GradScaler(enabled=(device.type == "cuda"))
 
     best_auc  = 0.0
     ckpt_path = CKPT_DIR / "odir_best.pt"
