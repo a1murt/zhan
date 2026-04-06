@@ -25,3 +25,4 @@ frontend/.env.local
 
 # Claude
 .claude/
+CLAUDE.md

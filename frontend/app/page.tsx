@@ -53,15 +53,25 @@ interface PredictionResult {
 interface FormValues {
   age: string
   gender: string
-  baseline_se: string
-  axial_length: string
+  refraction_without: string
+  refraction_with: string
+  axl_current: string
+  axl_6m_ago: string
+  family_history: string
+  screen_hours: string
+  outdoor_hours: string
 }
 
 interface FormErrors {
   age?: string
   gender?: string
-  baseline_se?: string
-  axial_length?: string
+  refraction_without?: string
+  refraction_with?: string
+  axl_current?: string
+  axl_6m_ago?: string
+  family_history?: string
+  screen_hours?: string
+  outdoor_hours?: string
   image?: string
 }
 
@@ -69,7 +79,7 @@ interface FormErrors {
 
 const API_ENDPOINT =
   (typeof process !== 'undefined' && process.env?.NEXT_PUBLIC_API_URL) ||
-  'http://localhost:8000/predict/'
+  'http://localhost:8050/predict/'
 
 const ACCEPTED_MIME = new Set(['image/jpeg', 'image/jpg', 'image/png'])
 const MAX_FILE_BYTES = 20 * 1024 * 1024 // 20 MB
@@ -148,17 +158,61 @@ function validate(form: FormValues, image: File | null): FormErrors {
     errors.gender = 'Gender is required.'
   }
 
-  if (form.baseline_se.trim()) {
-    const se = Number(form.baseline_se)
-    if (!Number.isFinite(se) || se < -30 || se > 10) {
-      errors.baseline_se = 'Value must be between −30.00 and +10.00 D.'
+  if (!form.refraction_without.trim()) {
+    errors.refraction_without = 'Refraction (without cycloplegia) is required.'
+  } else {
+    const v = Number(form.refraction_without)
+    if (!Number.isFinite(v) || v < -30 || v > 10) {
+      errors.refraction_without = 'Value must be between −30.00 and +10.00 D.'
     }
   }
 
-  if (form.axial_length.trim()) {
-    const al = Number(form.axial_length)
-    if (!Number.isFinite(al) || al < 18 || al > 40) {
-      errors.axial_length = 'Value must be between 18.00 and 40.00 mm.'
+  if (!form.refraction_with.trim()) {
+    errors.refraction_with = 'Refraction (with cycloplegia) is required.'
+  } else {
+    const v = Number(form.refraction_with)
+    if (!Number.isFinite(v) || v < -30 || v > 10) {
+      errors.refraction_with = 'Value must be between −30.00 and +10.00 D.'
+    }
+  }
+
+  if (!form.axl_current.trim()) {
+    errors.axl_current = 'Current axial length is required.'
+  } else {
+    const v = Number(form.axl_current)
+    if (!Number.isFinite(v) || v < 18 || v > 40) {
+      errors.axl_current = 'Value must be between 18.00 and 40.00 mm.'
+    }
+  }
+
+  if (!form.axl_6m_ago.trim()) {
+    errors.axl_6m_ago = 'Axial length (6 months ago) is required.'
+  } else {
+    const v = Number(form.axl_6m_ago)
+    if (!Number.isFinite(v) || v < 18 || v > 40) {
+      errors.axl_6m_ago = 'Value must be between 18.00 and 40.00 mm.'
+    }
+  }
+
+  if (!form.family_history) {
+    errors.family_history = 'Family history is required.'
+  }
+
+  if (!form.screen_hours.trim()) {
+    errors.screen_hours = 'Screen hours is required.'
+  } else {
+    const v = Number(form.screen_hours)
+    if (!Number.isFinite(v) || v < 0 || v > 24) {
+      errors.screen_hours = 'Value must be between 0 and 24 hours.'
+    }
+  }
+
+  if (!form.outdoor_hours.trim()) {
+    errors.outdoor_hours = 'Outdoor hours is required.'
+  } else {
+    const v = Number(form.outdoor_hours)
+    if (!Number.isFinite(v) || v < 0 || v > 24) {
+      errors.outdoor_hours = 'Value must be between 0 and 24 hours.'
     }
   }
 
@@ -178,8 +232,13 @@ export default function MyopiaDashboard() {
   const [form, setForm] = useState<FormValues>({
     age: '',
     gender: '',
-    baseline_se: '',
-    axial_length: '',
+    refraction_without: '',
+    refraction_with: '',
+    axl_current: '',
+    axl_6m_ago: '',
+    family_history: '',
+    screen_hours: '',
+    outdoor_hours: '',
   })
   const [image, setImage] = useState<File | null>(null)
   const [imagePreview, setImagePreview] = useState<string | null>(null)
@@ -252,7 +311,7 @@ export default function MyopiaDashboard() {
   // ── Form field helpers ────────────────────────────────────────────────────
 
   const handleTextField =
-    (field: keyof Omit<FormValues, 'gender'>) =>
+    (field: keyof Omit<FormValues, 'gender' | 'family_history'>) =>
     (e: ChangeEvent<HTMLInputElement>) => {
       setForm(prev => ({ ...prev, [field]: e.target.value }))
       setFieldErrors(prev => ({ ...prev, [field]: undefined }))
@@ -263,10 +322,15 @@ export default function MyopiaDashboard() {
     setFieldErrors(prev => ({ ...prev, gender: undefined }))
   }
 
+  const handleFamilyHistory = (value: string) => {
+    setForm(prev => ({ ...prev, family_history: value }))
+    setFieldErrors(prev => ({ ...prev, family_history: undefined }))
+  }
+
   // ── Reset ─────────────────────────────────────────────────────────────────
 
   const handleReset = useCallback(() => {
-    setForm({ age: '', gender: '', baseline_se: '', axial_length: '' })
+    setForm({ age: '', gender: '', refraction_without: '', refraction_with: '', axl_current: '', axl_6m_ago: '', family_history: '', screen_hours: '', outdoor_hours: '' })
     setImage(null)
     setImagePreview(null)
     setResult(null)
@@ -295,8 +359,13 @@ export default function MyopiaDashboard() {
       payload.append('fundus_image', image!)
       payload.append('age', form.age)
       payload.append('gender', form.gender === 'male' ? 'M' : 'F')
-      payload.append('baseline_se', form.baseline_se)
-      payload.append('axial_length', form.axial_length)
+      payload.append('refraction_without', form.refraction_without)
+      payload.append('refraction_with', form.refraction_with)
+      payload.append('axl_current', form.axl_current)
+      payload.append('axl_6m_ago', form.axl_6m_ago)
+      payload.append('family_history', form.family_history)
+      payload.append('screen_hours', form.screen_hours)
+      payload.append('outdoor_hours', form.outdoor_hours)
 
       try {
         const res = await fetch(API_ENDPOINT, { method: 'POST', body: payload })
@@ -318,7 +387,7 @@ export default function MyopiaDashboard() {
         setApiError(
           err instanceof Error
             ? err.message
-            : 'Unexpected network error. Ensure the inference server is running on port 8000.',
+            : 'Unexpected network error. Ensure the inference server is running on port 8050.',
         )
       } finally {
         setIsLoading(false)
@@ -409,8 +478,8 @@ export default function MyopiaDashboard() {
                     Patient Clinical Parameters
                   </CardTitle>
                   <CardDescription className="text-xs">
-                    All fields are required. Values feed the tabular MLP branch
-                    of the fusion model.
+                    All fields are required. Values feed the tabular branch
+                    of the multimodal fusion model.
                   </CardDescription>
                 </CardHeader>
                 <CardContent>
@@ -483,33 +552,33 @@ export default function MyopiaDashboard() {
                       )}
                     </div>
 
-                    {/* Baseline SE */}
+                    {/* Refraction without cycloplegia */}
                     <div className="space-y-1.5">
                       <Label
-                        htmlFor="baseline_se"
+                        htmlFor="refraction_without"
                         className="text-sm font-medium text-slate-700"
                       >
-                        Baseline Spherical Equivalent{' '}
-                        <span className="font-normal text-slate-400">(D, optional)</span>
+                        Refraction (without cycloplegia){' '}
+                        <span className="font-normal text-slate-400">(D)</span>
                       </Label>
                       <Input
-                        id="baseline_se"
+                        id="refraction_without"
                         type="number"
                         step={0.25}
                         min={-30}
                         max={10}
                         placeholder="e.g. −3.50"
-                        value={form.baseline_se}
-                        onChange={handleTextField('baseline_se')}
+                        value={form.refraction_without}
+                        onChange={handleTextField('refraction_without')}
                         className={cn(
                           'h-9 text-sm',
-                          fieldErrors.baseline_se &&
+                          fieldErrors.refraction_without &&
                             'border-red-400 focus-visible:ring-red-400',
                         )}
                       />
-                      {fieldErrors.baseline_se ? (
+                      {fieldErrors.refraction_without ? (
                         <p className="text-xs text-red-600">
-                          {fieldErrors.baseline_se}
+                          {fieldErrors.refraction_without}
                         </p>
                       ) : (
                         <p className="text-xs text-slate-400">
@@ -518,37 +587,208 @@ export default function MyopiaDashboard() {
                       )}
                     </div>
 
-                    {/* Axial Length */}
+                    {/* Refraction with cycloplegia */}
                     <div className="space-y-1.5">
                       <Label
-                        htmlFor="axial_length"
+                        htmlFor="refraction_with"
                         className="text-sm font-medium text-slate-700"
                       >
-                        Axial Length{' '}
-                        <span className="font-normal text-slate-400">(mm, optional)</span>
+                        Refraction (with cycloplegia){' '}
+                        <span className="font-normal text-slate-400">(D)</span>
                       </Label>
                       <Input
-                        id="axial_length"
+                        id="refraction_with"
                         type="number"
-                        step={0.01}
-                        min={18}
-                        max={35}
-                        placeholder="e.g. 25.43"
-                        value={form.axial_length}
-                        onChange={handleTextField('axial_length')}
+                        step={0.25}
+                        min={-30}
+                        max={10}
+                        placeholder="e.g. −2.75"
+                        value={form.refraction_with}
+                        onChange={handleTextField('refraction_with')}
                         className={cn(
                           'h-9 text-sm',
-                          fieldErrors.axial_length &&
+                          fieldErrors.refraction_with &&
                             'border-red-400 focus-visible:ring-red-400',
                         )}
                       />
-                      {fieldErrors.axial_length ? (
+                      {fieldErrors.refraction_with ? (
                         <p className="text-xs text-red-600">
-                          {fieldErrors.axial_length}
+                          {fieldErrors.refraction_with}
                         </p>
                       ) : (
                         <p className="text-xs text-slate-400">
-                          Normal range: 22–27 mm &nbsp;·&nbsp; step 0.01 mm
+                          Negative = myopic &nbsp;·&nbsp; step 0.25 D
+                        </p>
+                      )}
+                    </div>
+
+                    {/* AXL current */}
+                    <div className="space-y-1.5">
+                      <Label
+                        htmlFor="axl_current"
+                        className="text-sm font-medium text-slate-700"
+                      >
+                        Axial Length (current){' '}
+                        <span className="font-normal text-slate-400">(mm)</span>
+                      </Label>
+                      <Input
+                        id="axl_current"
+                        type="number"
+                        step={0.01}
+                        min={18}
+                        max={40}
+                        placeholder="e.g. 25.43"
+                        value={form.axl_current}
+                        onChange={handleTextField('axl_current')}
+                        className={cn(
+                          'h-9 text-sm',
+                          fieldErrors.axl_current &&
+                            'border-red-400 focus-visible:ring-red-400',
+                        )}
+                      />
+                      {fieldErrors.axl_current ? (
+                        <p className="text-xs text-red-600">
+                          {fieldErrors.axl_current}
+                        </p>
+                      ) : (
+                        <p className="text-xs text-slate-400">
+                          Normal range: 22–27 mm
+                        </p>
+                      )}
+                    </div>
+
+                    {/* AXL 6 months ago */}
+                    <div className="space-y-1.5">
+                      <Label
+                        htmlFor="axl_6m_ago"
+                        className="text-sm font-medium text-slate-700"
+                      >
+                        Axial Length (6 months ago){' '}
+                        <span className="font-normal text-slate-400">(mm)</span>
+                      </Label>
+                      <Input
+                        id="axl_6m_ago"
+                        type="number"
+                        step={0.01}
+                        min={18}
+                        max={40}
+                        placeholder="e.g. 25.20"
+                        value={form.axl_6m_ago}
+                        onChange={handleTextField('axl_6m_ago')}
+                        className={cn(
+                          'h-9 text-sm',
+                          fieldErrors.axl_6m_ago &&
+                            'border-red-400 focus-visible:ring-red-400',
+                        )}
+                      />
+                      {fieldErrors.axl_6m_ago ? (
+                        <p className="text-xs text-red-600">
+                          {fieldErrors.axl_6m_ago}
+                        </p>
+                      ) : (
+                        <p className="text-xs text-slate-400">
+                          Previous biometry measurement
+                        </p>
+                      )}
+                    </div>
+
+                    {/* Family history */}
+                    <div className="space-y-1.5">
+                      <Label className="text-sm font-medium text-slate-700">
+                        Family History (myopic parents)
+                      </Label>
+                      <Select
+                        value={form.family_history}
+                        onValueChange={handleFamilyHistory}
+                      >
+                        <SelectTrigger
+                          className={cn(
+                            'h-9 text-sm',
+                            fieldErrors.family_history &&
+                              'border-red-400 focus:ring-red-400',
+                          )}
+                        >
+                          <SelectValue placeholder="Select…" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="0">0 — Neither parent</SelectItem>
+                          <SelectItem value="1">1 — One parent</SelectItem>
+                          <SelectItem value="2">2 — Both parents</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      {fieldErrors.family_history && (
+                        <p className="text-xs text-red-600">
+                          {fieldErrors.family_history}
+                        </p>
+                      )}
+                    </div>
+
+                    {/* Screen hours */}
+                    <div className="space-y-1.5">
+                      <Label
+                        htmlFor="screen_hours"
+                        className="text-sm font-medium text-slate-700"
+                      >
+                        Daily Screen Time{' '}
+                        <span className="font-normal text-slate-400">(hours)</span>
+                      </Label>
+                      <Input
+                        id="screen_hours"
+                        type="number"
+                        step={0.5}
+                        min={0}
+                        max={24}
+                        placeholder="e.g. 6"
+                        value={form.screen_hours}
+                        onChange={handleTextField('screen_hours')}
+                        className={cn(
+                          'h-9 text-sm',
+                          fieldErrors.screen_hours &&
+                            'border-red-400 focus-visible:ring-red-400',
+                        )}
+                      />
+                      {fieldErrors.screen_hours ? (
+                        <p className="text-xs text-red-600">
+                          {fieldErrors.screen_hours}
+                        </p>
+                      ) : (
+                        <p className="text-xs text-slate-400">
+                          Average daily near-work screen exposure
+                        </p>
+                      )}
+                    </div>
+
+                    {/* Outdoor hours */}
+                    <div className="space-y-1.5">
+                      <Label
+                        htmlFor="outdoor_hours"
+                        className="text-sm font-medium text-slate-700"
+                      >
+                        Daily Outdoor Time{' '}
+                        <span className="font-normal text-slate-400">(hours)</span>
+                      </Label>
+                      <Input
+                        id="outdoor_hours"
+                        type="number"
+                        step={0.5}
+                        min={0}
+                        max={24}
+                        placeholder="e.g. 2"
+                        value={form.outdoor_hours}
+                        onChange={handleTextField('outdoor_hours')}
+                        className={cn(
+                          'h-9 text-sm',
+                          fieldErrors.outdoor_hours &&
+                            'border-red-400 focus-visible:ring-red-400',
+                        )}
+                      />
+                      {fieldErrors.outdoor_hours ? (
+                        <p className="text-xs text-red-600">
+                          {fieldErrors.outdoor_hours}
+                        </p>
+                      ) : (
+                        <p className="text-xs text-slate-400">
+                          Natural light exposure &nbsp;·&nbsp; recommended 90+ min/day
                         </p>
                       )}
                     </div>
