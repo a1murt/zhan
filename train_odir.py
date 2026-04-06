@@ -105,7 +105,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Paths — edit IMAGE_DIR if not passing via CLI
 # ---------------------------------------------------------------------------
-CSV_PATH   = Path("data/processed/odir_clean.csv")
+CSV_PATH   = Path("data/processed/odir_external_real.csv")
 CKPT_DIR   = Path("checkpoints")
 IMAGE_DIR  = Path("data/raw/images")   # <-- default; override via --image-dir
 
@@ -346,26 +346,29 @@ def main() -> None:
         sys.exit(1)
 
     # ── Validate image directory ───────────────────────────────────────────
-    if not image_dir.exists():
-        logger.error(
-            "Image directory not found: %s\n"
-            "Download the ODIR-5K fundus images and set --image-dir to the folder "
-            "containing 0_left.jpg, 0_right.jpg, etc.",
-            image_dir,
-        )
-        sys.exit(1)
+    # if not image_dir.exists():
+    #     logger.error(
+    #         "Image directory not found: %s\n"
+    #         "Download the ODIR-5K fundus images and set --image-dir to the folder "
+    #         "containing 0_left.jpg, 0_right.jpg, etc.",
+    #         image_dir,
+    #     )
+    #     sys.exit(1)
 
-    sample_imgs = list(image_dir.glob("*.jpg"))[:3]
-    if not sample_imgs:
-        logger.error(
-            "No .jpg files found in %s — wrong directory?", image_dir
-        )
-        sys.exit(1)
-    logger.info("Image directory OK: %s  (%d+ images found)", image_dir, len(sample_imgs))
+    # sample_imgs = list(image_dir.glob("*.jpg"))[:3]
+    # if not sample_imgs:
+    #     logger.error(
+    #         "No .jpg files found in %s — wrong directory?", image_dir
+    #     )
+    #     sys.exit(1)
+    # logger.info("Image directory OK: %s  (%d+ images found)", image_dir, len(sample_imgs))
+
+    # Skipping image directory check (tabular-only mode)
+    logger.info("Skipping image directory validation (no images used)")
 
     # ── Load CSV and build full Image_Path ────────────────────────────────
     df = pd.read_csv(CSV_PATH)
-    df["Image_Path"] = df["Image_Name"].apply(lambda fn: str(image_dir / fn))
+    # df["Image_Path"] = df["Image_Name"].apply(lambda fn: str(image_dir / fn))
     logger.info("Loaded %d rows from %s", len(df), CSV_PATH)
     logger.info(
         "Myopia distribution: pos=%d (%.1f%%) | neg=%d (%.1f%%)",

@@ -22,6 +22,7 @@ import torch
 from sklearn.impute import SimpleImputer
 from sklearn.preprocessing import LabelEncoder
 from torch.utils.data import Dataset
+from sklearn.preprocessing import StandardScaler
 
 # ---------------------------------------------------------------------------
 # ODIR-specific column constants
@@ -32,7 +33,17 @@ ODIR_CATEGORICAL_COLS = ["Gender"]      # stored as int 0/1 — LabelEncoder is 
 ODIR_LABEL_COL        = "Myopia"
 ODIR_IMAGE_COL        = "Image_Path"   # full absolute path, built by launcher
 
-ODIR_TABULAR_COLS     = ODIR_NUMERICAL_COLS + ODIR_CATEGORICAL_COLS  # dim = 2
+#changes here
+ODIR_TABULAR_COLS = [
+    "refraction_without",
+    "refraction_with",
+    "axl_current",
+    "axl_delta",
+    "age",
+    "genetics",
+    "screen_hours",
+    "outdoor_hours"
+]
 
 
 class OdirDataset(Dataset):
@@ -116,6 +127,12 @@ class OdirDataset(Dataset):
         self.tabular_features: np.ndarray = (
             df[ODIR_TABULAR_COLS].values.astype(np.float32)
         )
+
+        self.scaler = StandardScaler()
+        self.tabular_features = self.scaler.fit_transform(self.tabular_features)
+
+
+
         self.labels: np.ndarray = df[ODIR_LABEL_COL].values.astype(np.int64)
         self.image_paths: np.ndarray = df[ODIR_IMAGE_COL].values
 
@@ -128,15 +145,18 @@ class OdirDataset(Dataset):
         self, idx: int
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         # ---- Image -------------------------------------------------------
-        raw = cv2.imread(str(self.image_paths[idx]))
-        if raw is None:
-            raise FileNotFoundError(
-                f"[OdirDataset] Cannot read image at index {idx}: "
-                f"{self.image_paths[idx]}\n"
-                "Ensure IMAGE_DIR in train_odir.py points to the folder "
-                "containing the ODIR-5K fundus JPG files."
-            )
-        image = cv2.cvtColor(raw, cv2.COLOR_BGR2RGB)
+        # raw = cv2.imread(str(self.image_paths[idx]))
+        # if raw is None:
+        #     raise FileNotFoundError(
+        #         f"[OdirDataset] Cannot read image at index {idx}: "
+        #         f"{self.image_paths[idx]}\n"
+        #         "Ensure IMAGE_DIR in train_odir.py points to the folder "
+        #         "containing the ODIR-5K fundus JPG files."
+        #     )
+        # image = cv2.cvtColor(raw, cv2.COLOR_BGR2RGB)
+        
+        # Dummy image (temporary fix for tabular-only dataset)
+        image = np.zeros((224, 224, 3), dtype=np.uint8)
 
         if self.transform is not None:
             image = self.transform(image=image)["image"]

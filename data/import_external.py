@@ -4,6 +4,9 @@ import os
 # Load dataset
 df = pd.read_csv("data/raw/myopia.csv", sep=";")
 
+# Clean column names
+df.columns = df.columns.str.replace('"', '').str.strip()
+
 # Rename columns
 df = df.rename(columns={
     "SPHEQ": "refraction_without",
@@ -21,7 +24,7 @@ df = df.rename(columns={
 # Genetics (0,1,2)
 df["genetics"] = df["mom_myopia"] + df["dad_myopia"]
 
-# Screen time
+# Screen time (USE NEW COLUMN NAMES ONLY)
 df["screen_hours"] = (
     df["computer_hours"] +
     df["tv_hours"] +
@@ -35,17 +38,23 @@ df["refraction_with"] = df["refraction_without"]
 # No historical AXL → placeholder
 df["axl_delta"] = 0
 
+# Create target label (Myopia)
+df["Myopia"] = (df["refraction_without"] < -0.5).astype(int)
+
 # Final features
-df = df[[
-    "refraction_without",
-    "refraction_with",
-    "axl_current",
-    "axl_delta",
-    "age",
-    "genetics",
-    "screen_hours",
-    "outdoor_hours"
-]]
+df = df[
+    [
+        "refraction_without",
+        "refraction_with",
+        "axl_current",
+        "axl_delta",
+        "age",
+        "genetics",
+        "screen_hours",
+        "outdoor_hours",
+        "Myopia",
+    ]
+]
 
 # Clean
 df = df.dropna()
