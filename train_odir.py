@@ -26,7 +26,7 @@ import pandas as pd
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from sklearn.model_selection import GroupShuffleSplit
+# from sklearn.model_selection import GroupShuffleSplit
 from torch.utils.data import DataLoader
 
 # ---------------------------------------------------------------------------
@@ -34,11 +34,7 @@ from torch.utils.data import DataLoader
 # ---------------------------------------------------------------------------
 sys.path.insert(0, str(Path(__file__).parent))
 
-from src.data.odir_dataset import (
-    ODIR_LABEL_COL,
-    ODIR_PATIENT_ID_COL,
-    OdirDataset,
-)
+from src.data.odir_dataset import OdirDataset
 from sklearn.metrics import (
     confusion_matrix,
     precision_score,
@@ -48,6 +44,8 @@ from sklearn.metrics import (
 
 from src.data.transforms import get_train_transforms, get_val_transforms
 from src.models.multimodal import MultimodalMyopiaClassifier
+
+from sklearn.utils.class_weight import compute_class_weight
 
 
 # ---------------------------------------------------------------------------
@@ -105,7 +103,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Paths — edit IMAGE_DIR if not passing via CLI
 # ---------------------------------------------------------------------------
-CSV_PATH   = Path("data/processed/odir_clean.csv")
+CSV_PATH   = Path("data/processed/odir_external_real.csv")
 CKPT_DIR   = Path("checkpoints")
 IMAGE_DIR  = Path("data/raw/images")   # <-- default; override via --image-dir
 
@@ -130,19 +128,21 @@ class FocalLoss(nn.Module):
 # Patient-safe train/val split
 # ---------------------------------------------------------------------------
 
+# FIX: use stratified split to avoid validation having only one class
+# WHY: previous random split caused AUC = nan
+from sklearn.model_selection import train_test_split
+
 def split_patients(
     df: pd.DataFrame, val_size: float = 0.20, seed: int = 42
-) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    gss = GroupShuffleSplit(n_splits=1, test_size=val_size, random_state=seed)
-    groups = df[ODIR_PATIENT_ID_COL].values
-    train_idx, val_idx = next(
-        gss.split(df, df[ODIR_LABEL_COL], groups=groups)
-    )
-    return (
-        df.iloc[train_idx].reset_index(drop=True),
-        df.iloc[val_idx].reset_index(drop=True),
+):
+    train_df, val_df = train_test_split(
+        df,
+        test_size=val_size,
+        random_state=seed,
+        stratify=df["Myopia"],  
     )
 
+    return train_df.reset_index(drop=True), val_df.reset_index(drop=True)
 
 # ---------------------------------------------------------------------------
 # Epoch runner
@@ -173,18 +173,24 @@ def run_epoch(
             tabular = tabular.to(device, non_blocking=True)
             labels  = labels.to(device, non_blocking=True)
 
-            with torch.amp.autocast(device_type=device.type, enabled=use_amp):
+            with torch.cuda.amp.autocast(enabled=use_amp):
                 logits = model(images, tabular)
                 loss   = criterion(logits, labels)
 
             if is_train:
-                assert optimizer is not None and scaler is not None
                 optimizer.zero_grad(set_to_none=True)
-                scaler.scale(loss).backward()
-                scaler.unscale_(optimizer)
-                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-                scaler.step(optimizer)
-                scaler.update()
+
+                if scaler is not None:  # GPU case
+                    scaler.scale(loss).backward()
+                    scaler.unscale_(optimizer)
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                    scaler.step(optimizer)
+                    scaler.update()
+
+                else:  # CPU case
+                    loss.backward()
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                    optimizer.step()
 
             total_loss += loss.item() * images.size(0)
 
@@ -229,11 +235,13 @@ def train_with_batch_size(
 
     # ── Split ──────────────────────────────────────────────────────────────
     train_df, val_df = split_patients(df)
+    # CHANGED: removed patient-based logging
+    # WHY: dataset does not have patient IDs anymore
     logger.info(
-        "Split -> train: %d rows (%d patients) | val: %d rows (%d patients)",
-        len(train_df), train_df[ODIR_PATIENT_ID_COL].nunique(),
-        len(val_df),   val_df[ODIR_PATIENT_ID_COL].nunique(),
-    )
+        "Split -> train: %d rows | val: %d rows",
+        len(train_df),
+        len(val_df),
+)
 
     # ── Datasets ──────────────────────────────────────────────────────────
     train_ds = OdirDataset(train_df, transform=get_train_transforms(), fit_imputers=True)
@@ -242,7 +250,7 @@ def train_with_batch_size(
         transform=get_val_transforms(),
         fit_imputers=False,
         numerical_imputer=train_ds.numerical_imputer,
-        categorical_imputer=train_ds.categorical_imputer,
+        scaler=train_ds.scaler, # FIX: removed categorical_imputer (not used anymore)
         label_encoders=train_ds.label_encoders,
     )
 
@@ -259,19 +267,38 @@ def train_with_batch_size(
 
     # ── Model ─────────────────────────────────────────────────────────────
     model = MultimodalMyopiaClassifier(
-        tabular_input_dim=train_ds.tabular_input_dim,  # 2
-        num_classes=2,                                  # binary: no myopia / myopia
+        tabular_input_dim=train_ds.tabular_input_dim,
+        num_classes=2,
     ).to(device)
+
+    # FREEZE vision branch — train only tabular branch + fusion head
+    for param in model.vision_branch.parameters():
+        param.requires_grad = False
+    logger.info("Vision branch frozen (requires_grad=False)")
+
     logger.info(
         "Model: tabular_input_dim=%d | num_classes=2", train_ds.tabular_input_dim
     )
 
-    criterion = FocalLoss(gamma=2.0, alpha=0.25)
+    
+
+    class_weights = compute_class_weight(
+        "balanced",
+        classes=np.unique(df["Myopia"]),
+        y=df["Myopia"]
+    )
+
+    weights = torch.tensor(class_weights, dtype=torch.float32).to(device)
+
+    criterion = nn.CrossEntropyLoss(weight=weights)
+
+
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4, weight_decay=1e-2)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
         optimizer, T_0=10, T_mult=2, eta_min=1e-6
     )
-    scaler = torch.amp.GradScaler("cuda", enabled=(device.type == "cuda"))
+    # FIX: safer AMP initialization (works across PyTorch versions)
+    scaler = torch.cuda.amp.GradScaler() if device.type == "cuda" else None
 
     best_auc  = 0.0
     ckpt_path = CKPT_DIR / "odir_best.pt"
@@ -309,7 +336,7 @@ def train_with_batch_size(
                     "best_auc": best_auc,
                     "tabular_input_dim": train_ds.tabular_input_dim,
                     "numerical_imputer": train_ds.numerical_imputer,
-                    "categorical_imputer": train_ds.categorical_imputer,
+                    "scaler": train_ds.scaler,
                     "label_encoders": train_ds.label_encoders,
                     "num_classes": 2,
                 },
@@ -346,26 +373,29 @@ def main() -> None:
         sys.exit(1)
 
     # ── Validate image directory ───────────────────────────────────────────
-    if not image_dir.exists():
-        logger.error(
-            "Image directory not found: %s\n"
-            "Download the ODIR-5K fundus images and set --image-dir to the folder "
-            "containing 0_left.jpg, 0_right.jpg, etc.",
-            image_dir,
-        )
-        sys.exit(1)
+    # if not image_dir.exists():
+    #     logger.error(
+    #         "Image directory not found: %s\n"
+    #         "Download the ODIR-5K fundus images and set --image-dir to the folder "
+    #         "containing 0_left.jpg, 0_right.jpg, etc.",
+    #         image_dir,
+    #     )
+    #     sys.exit(1)
 
-    sample_imgs = list(image_dir.glob("*.jpg"))[:3]
-    if not sample_imgs:
-        logger.error(
-            "No .jpg files found in %s — wrong directory?", image_dir
-        )
-        sys.exit(1)
-    logger.info("Image directory OK: %s  (%d+ images found)", image_dir, len(sample_imgs))
+    # sample_imgs = list(image_dir.glob("*.jpg"))[:3]
+    # if not sample_imgs:
+    #     logger.error(
+    #         "No .jpg files found in %s — wrong directory?", image_dir
+    #     )
+    #     sys.exit(1)
+    # logger.info("Image directory OK: %s  (%d+ images found)", image_dir, len(sample_imgs))
+
+    # Skipping image directory check (tabular-only mode)
+    logger.info("Skipping image directory validation (no images used)")
 
     # ── Load CSV and build full Image_Path ────────────────────────────────
     df = pd.read_csv(CSV_PATH)
-    df["Image_Path"] = df["Image_Name"].apply(lambda fn: str(image_dir / fn))
+    # df["Image_Path"] = df["Image_Name"].apply(lambda fn: str(image_dir / fn))
     logger.info("Loaded %d rows from %s", len(df), CSV_PATH)
     logger.info(
         "Myopia distribution: pos=%d (%.1f%%) | neg=%d (%.1f%%)",
