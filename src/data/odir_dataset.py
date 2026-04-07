@@ -50,7 +50,7 @@ ODIR_IMAGE_COL = None
 
 
 class OdirDataset(Dataset):
-
+    
     def __init__(
         self,
         dataframe: pd.DataFrame,
@@ -59,7 +59,10 @@ class OdirDataset(Dataset):
         numerical_imputer: Optional[SimpleImputer] = None,
         categorical_imputer=None,
         label_encoders: Optional[Dict] = None,
+        scaler: Optional[StandardScaler] = None,
     ) -> None:
+        
+        
 
         self.transform = transform
 
@@ -91,10 +94,18 @@ class OdirDataset(Dataset):
         # SCALE FEATURES
         # ------------------------------------------------------------------
         # CHANGED: scale all features properly
-        self.scaler = StandardScaler()
-        self.tabular_features: np.ndarray = self.scaler.fit_transform(
-            df[ODIR_TABULAR_COLS]
-        ).astype(np.float32)
+        if fit_imputers:
+            self.scaler = StandardScaler()
+            self.tabular_features: np.ndarray = self.scaler.fit_transform(
+                df[ODIR_TABULAR_COLS]
+            ).astype(np.float32)
+        else:
+            if scaler is None:
+                raise ValueError("Pass scaler when fit_imputers=False.")
+            self.scaler = scaler
+            self.tabular_features: np.ndarray = self.scaler.transform(
+                df[ODIR_TABULAR_COLS]
+            ).astype(np.float32)
 
         # ------------------------------------------------------------------
         # LABELS

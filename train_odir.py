@@ -26,7 +26,7 @@ import pandas as pd
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from sklearn.model_selection import GroupShuffleSplit
+# from sklearn.model_selection import GroupShuffleSplit
 from torch.utils.data import DataLoader
 
 # ---------------------------------------------------------------------------
@@ -34,11 +34,7 @@ from torch.utils.data import DataLoader
 # ---------------------------------------------------------------------------
 sys.path.insert(0, str(Path(__file__).parent))
 
-from src.data.odir_dataset import (
-    ODIR_LABEL_COL,
-    ODIR_PATIENT_ID_COL,
-    OdirDataset,
-)
+from src.data.odir_dataset import OdirDataset
 from sklearn.metrics import (
     confusion_matrix,
     precision_score,
@@ -48,6 +44,8 @@ from sklearn.metrics import (
 
 from src.data.transforms import get_train_transforms, get_val_transforms
 from src.models.multimodal import MultimodalMyopiaClassifier
+
+from sklearn.utils.class_weight import compute_class_weight
 
 
 # ---------------------------------------------------------------------------
@@ -130,18 +128,21 @@ class FocalLoss(nn.Module):
 # Patient-safe train/val split
 # ---------------------------------------------------------------------------
 
-# CHANGED: simple random split instead of patient-based split
-# WHY: external dataset does not contain patient grouping info
+# FIX: use stratified split to avoid validation having only one class
+# WHY: previous random split caused AUC = nan
+from sklearn.model_selection import train_test_split
 
 def split_patients(
     df: pd.DataFrame, val_size: float = 0.20, seed: int = 42
-) -> Tuple[pd.DataFrame, pd.DataFrame]:
+):
+    train_df, val_df = train_test_split(
+        df,
+        test_size=val_size,
+        random_state=seed,
+        stratify=df["Myopia"],  
+    )
 
-    df = df.sample(frac=1, random_state=seed).reset_index(drop=True)
-
-    split_idx = int(len(df) * (1 - val_size))
-
-    return df.iloc[:split_idx], df.iloc[split_idx:]
+    return train_df.reset_index(drop=True), val_df.reset_index(drop=True)
 
 # ---------------------------------------------------------------------------
 # Epoch runner
@@ -177,13 +178,19 @@ def run_epoch(
                 loss   = criterion(logits, labels)
 
             if is_train:
-                assert optimizer is not None and scaler is not None
                 optimizer.zero_grad(set_to_none=True)
-                scaler.scale(loss).backward()
-                scaler.unscale_(optimizer)
-                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-                scaler.step(optimizer)
-                scaler.update()
+
+                if scaler is not None:  # GPU case
+                    scaler.scale(loss).backward()
+                    scaler.unscale_(optimizer)
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                    scaler.step(optimizer)
+                    scaler.update()
+
+                else:  # CPU case
+                    loss.backward()
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                    optimizer.step()
 
             total_loss += loss.item() * images.size(0)
 
@@ -243,7 +250,7 @@ def train_with_batch_size(
         transform=get_val_transforms(),
         fit_imputers=False,
         numerical_imputer=train_ds.numerical_imputer,
-        categorical_imputer=train_ds.categorical_imputer,
+        scaler=train_ds.scaler, # FIX: removed categorical_imputer (not used anymore)
         label_encoders=train_ds.label_encoders,
     )
 
@@ -260,21 +267,38 @@ def train_with_batch_size(
 
     # ── Model ─────────────────────────────────────────────────────────────
     model = MultimodalMyopiaClassifier(
-        # CHANGED: now using engineered tabular features (8 total features)
-        # WHY: we replaced original (Age + Gender) with full clinical + lifestyle features
         tabular_input_dim=train_ds.tabular_input_dim,
-        num_classes=2,                                  # binary: no myopia / myopia
+        num_classes=2,
     ).to(device)
+
+    # FREEZE vision branch — train only tabular branch + fusion head
+    for param in model.vision_branch.parameters():
+        param.requires_grad = False
+    logger.info("Vision branch frozen (requires_grad=False)")
+
     logger.info(
         "Model: tabular_input_dim=%d | num_classes=2", train_ds.tabular_input_dim
     )
 
-    criterion = FocalLoss(gamma=2.0, alpha=0.25)
+    
+
+    class_weights = compute_class_weight(
+        "balanced",
+        classes=np.unique(df["Myopia"]),
+        y=df["Myopia"]
+    )
+
+    weights = torch.tensor(class_weights, dtype=torch.float32).to(device)
+
+    criterion = nn.CrossEntropyLoss(weight=weights)
+
+
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4, weight_decay=1e-2)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
         optimizer, T_0=10, T_mult=2, eta_min=1e-6
     )
-    scaler = torch.cuda.amp.GradScaler(enabled=(device.type == "cuda"))
+    # FIX: safer AMP initialization (works across PyTorch versions)
+    scaler = torch.cuda.amp.GradScaler() if device.type == "cuda" else None
 
     best_auc  = 0.0
     ckpt_path = CKPT_DIR / "odir_best.pt"
@@ -312,7 +336,7 @@ def train_with_batch_size(
                     "best_auc": best_auc,
                     "tabular_input_dim": train_ds.tabular_input_dim,
                     "numerical_imputer": train_ds.numerical_imputer,
-                    "categorical_imputer": train_ds.categorical_imputer,
+                    "scaler": train_ds.scaler,
                     "label_encoders": train_ds.label_encoders,
                     "num_classes": 2,
                 },

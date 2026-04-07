@@ -35,11 +35,14 @@ df["screen_hours"] = (
 # No cycloplegia data → copy
 df["refraction_with"] = df["refraction_without"]
 
-# No historical AXL → placeholder
+# axl_delta = 0 for all rows intentionally
+# WHY: this dataset has no historical AXL measurements (only one timepoint)
+# FUTURE: replace with real delta when a dataset with baseline + followup AXL is found
 df["axl_delta"] = 0
 
 # Create target label (Myopia)
-df["Myopia"] = (df["refraction_without"] < -0.5).astype(int)
+# Use the actual ground truth label from the dataset
+df["Myopia"] = df["MYOPIC"].astype(int)
 
 # Final features
 df = df[
