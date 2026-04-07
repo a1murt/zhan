@@ -358,7 +358,6 @@ export default function MyopiaDashboard() {
       const payload = new FormData()
       payload.append('fundus_image', image!)
       payload.append('age', form.age)
-      payload.append('gender', form.gender === 'male' ? 'M' : 'F')
       payload.append('refraction_without', form.refraction_without)
       payload.append('refraction_with', form.refraction_with)
       payload.append('axl_current', form.axl_current)

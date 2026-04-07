@@ -5,9 +5,15 @@ Endpoint
 --------
 POST /predict/
     Body : multipart/form-data
-        fundus_image : UploadFile  -- JPEG or PNG fundus photograph
-        age          : float       -- patient age (years)
-        gender       : str         -- "M" or "F"
+        fundus_image       : UploadFile  -- JPEG or PNG fundus photograph
+        age                : float       -- patient age (years)
+        refraction_without : float       -- refraction without cycloplegia (diopters)
+        refraction_with    : float       -- refraction with cycloplegia (diopters)
+        axl_current        : float       -- current axial length (mm)
+        axl_6m_ago         : float       -- axial length 6 months ago (mm)
+        family_history     : int         -- number of myopic parents (0, 1, or 2)
+        screen_hours       : float       -- daily screen time (hours)
+        outdoor_hours      : float       -- daily outdoor time (hours)
 
     Response : JSON
         diagnosis         : str   -- "No Myopia" | "Myopia"
@@ -73,12 +79,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     model.load_state_dict(ckpt["model_state_dict"])
     model.to(device).eval()
 
-    _STATE["model"]               = model
-    _STATE["device"]              = device
-    _STATE["numerical_imputer"]   = ckpt["numerical_imputer"]
-    _STATE["categorical_imputer"] = ckpt["categorical_imputer"]
-    _STATE["label_encoders"]      = ckpt["label_encoders"]
-    _STATE["transform"]           = get_val_transforms()
+    _STATE["model"]     = model
+    _STATE["device"]    = device
+    _STATE["scaler"]    = ckpt["scaler"]
+    _STATE["transform"] = get_val_transforms()
 
     logger.info(
         "Model ready. Best val AUC from training: %.4f (epoch %d)",
@@ -124,18 +128,37 @@ class PredictionResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-def _preprocess_tabular(age: float, gender_str: str) -> torch.Tensor:
-    """Return a (1, 2) float32 tensor [age_imputed, gender_encoded]."""
-    gender_int = 1 if gender_str.strip().upper() == "M" else 0
+def _preprocess_tabular(
+    refraction_without: float,
+    refraction_with: float,
+    axl_current: float,
+    axl_6m_ago: float,
+    age: float,
+    genetics: int,
+    screen_hours: float,
+    outdoor_hours: float,
+) -> torch.Tensor:
+    """Return a (1, 8) float32 tensor scaled with the training StandardScaler.
 
-    age_arr = _STATE["numerical_imputer"].transform(np.array([[age]]))
-    age_val = float(age_arr[0, 0])
+    Feature order must match ODIR_TABULAR_COLS in odir_dataset.py:
+    [refraction_without, refraction_with, axl_current, axl_delta,
+     age, genetics, screen_hours, outdoor_hours]
+    """
+    axl_delta = axl_current - axl_6m_ago
 
-    gen_imp = _STATE["categorical_imputer"].transform([[str(gender_int)]])[0, 0]
-    gen_enc = int(_STATE["label_encoders"]["Gender"].transform([str(gen_imp)])[0])
+    raw = np.array([[
+        refraction_without,
+        refraction_with,
+        axl_current,
+        axl_delta,
+        age,
+        float(genetics),
+        screen_hours,
+        outdoor_hours,
+    ]], dtype=np.float32)
 
-    tab = torch.tensor([[age_val, float(gen_enc)]], dtype=torch.float32)
-    return tab.to(_STATE["device"])
+    scaled = _STATE["scaler"].transform(raw).astype(np.float32)
+    return torch.tensor(scaled, dtype=torch.float32).to(_STATE["device"])
 
 
 def _decode_image(raw_bytes: bytes) -> np.ndarray:
@@ -164,9 +187,15 @@ def health() -> Dict[str, str]:
     summary="Detect myopia from fundus image",
 )
 async def predict(
-    fundus_image: UploadFile = File(..., description="Fundus photograph (JPEG or PNG)."),
-    age: float = Form(..., ge=1.0, le=110.0, description="Patient age in years."),
-    gender: str = Form(..., description='"M" (male) or "F" (female).'),
+    fundus_image:       UploadFile = File(..., description="Fundus photograph (JPEG or PNG)."),
+    age:                float = Form(..., ge=1.0,    le=110.0, description="Patient age in years."),
+    refraction_without: float = Form(..., ge=-30.0,  le=30.0,  description="Refraction without cycloplegia (diopters)."),
+    refraction_with:    float = Form(..., ge=-30.0,  le=30.0,  description="Refraction with cycloplegia (diopters)."),
+    axl_current:        float = Form(..., ge=10.0,   le=40.0,  description="Current axial length (mm)."),
+    axl_6m_ago:         float = Form(..., ge=10.0,   le=40.0,  description="Axial length 6 months ago (mm)."),
+    family_history:     int   = Form(..., ge=0,      le=2,     description="Number of myopic parents (0, 1, or 2)."),
+    screen_hours:       float = Form(..., ge=0.0,   le=24.0,  description="Daily screen time (hours)."),
+    outdoor_hours:      float = Form(..., ge=0.0,   le=24.0,  description="Daily outdoor time (hours)."),
 ) -> PredictionResponse:
     t0 = time.perf_counter()
 
@@ -182,7 +211,16 @@ async def predict(
 
     rgb = _decode_image(raw_bytes)
     image_t = _STATE["transform"](image=rgb)["image"].unsqueeze(0).to(_STATE["device"])
-    tab_t   = _preprocess_tabular(age, gender)
+    tab_t   = _preprocess_tabular(
+        refraction_without=refraction_without,
+        refraction_with=refraction_with,
+        axl_current=axl_current,
+        axl_6m_ago=axl_6m_ago,
+        age=age,
+        genetics=family_history,
+        screen_hours=screen_hours,
+        outdoor_hours=outdoor_hours,
+    )
 
     model: MultimodalMyopiaClassifier = _STATE["model"]
     use_amp = _STATE["device"].type == "cuda"
@@ -198,8 +236,9 @@ async def predict(
     elapsed   = (time.perf_counter() - t0) * 1000.0
 
     logger.info(
-        "Prediction: %s  conf=%.3f  p_myopia=%.3f  %.1f ms | age=%.0f gender=%s",
-        LABEL_MAP[pred_cls], confidence, p_myopia, elapsed, age, gender,
+        "Prediction: %s  conf=%.3f  p_myopia=%.3f  %.1f ms | age=%.0f axl_delta=%.2f genetics=%d",
+        LABEL_MAP[pred_cls], confidence, p_myopia, elapsed,
+        age, axl_current - axl_6m_ago, family_history,
     )
 
     return PredictionResponse(
