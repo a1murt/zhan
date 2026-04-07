@@ -25,4 +25,8 @@ frontend/.env.local
 
 # Claude
 .claude/
+.claude-flow/
 CLAUDE.md
+
+# OS
+.DS_Store

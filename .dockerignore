@@ -1,0 +1,16 @@
+__pycache__
+*.pyc
+.git
+.github
+.claude
+.claude-flow
+node_modules
+frontend/.next
+frontend/node_modules
+.env
+*.log
+.DS_Store
+data/raw
+checkpoints
+*.pt
+*.pth

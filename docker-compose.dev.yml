@@ -1,0 +1,11 @@
+services:
+  backend-mock:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    command: ["uvicorn", "src.api.mock_api:app", "--host", "0.0.0.0", "--port", "8050", "--reload"]
+    ports:
+      - "8050:8050"
+    volumes:
+      - ./src:/app/src
+    restart: unless-stopped
