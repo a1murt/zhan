@@ -47,10 +47,18 @@ jobs:
               sudo apt-get update && sudo apt-get install -y docker-compose-plugin
             fi
 
-            # Stop anything using our ports
+            # Stop any existing zhan containers
             sudo docker compose down --remove-orphans || true
-            sudo fuser -k 8050/tcp 2>/dev/null || true
-            sudo fuser -k 3000/tcp 2>/dev/null || true
+
+            # Kill ALL Docker containers using our ports (from previous deploys)
+            sudo docker ps -q --filter "publish=8050" | xargs -r sudo docker stop || true
+            sudo docker ps -q --filter "publish=3000" | xargs -r sudo docker stop || true
+
+            # Kill non-Docker processes on our ports
+            for port in 8050 3000; do
+              pid=$(sudo ss -tlnp "sport = :$port" | grep -oP 'pid=\K\d+' | head -1)
+              [ -n "$pid" ] && sudo kill -9 "$pid" 2>/dev/null || true
+            done
             sleep 2
 
             # Build and deploy
