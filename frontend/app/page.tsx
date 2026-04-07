@@ -79,7 +79,7 @@ interface FormErrors {
 
 const API_ENDPOINT =
   (typeof process !== 'undefined' && process.env?.NEXT_PUBLIC_API_URL) ||
-  'http://localhost:8050/predict/'
+  '/predict/'
 
 const ACCEPTED_MIME = new Set(['image/jpeg', 'image/jpg', 'image/png'])
 const MAX_FILE_BYTES = 20 * 1024 * 1024 // 20 MB
@@ -386,7 +386,7 @@ export default function MyopiaDashboard() {
         setApiError(
           err instanceof Error
             ? err.message
-            : 'Unexpected network error. Ensure the inference server is running on port 8050.',
+            : 'Unexpected network error. Ensure the inference server is running.',
         )
       } finally {
         setIsLoading(false)

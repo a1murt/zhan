@@ -1,23 +1,29 @@
 services:
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - frontend
+      - backend
+    restart: unless-stopped
+
   frontend:
     build:
       context: ./frontend
       dockerfile: Dockerfile
-    ports:
-      - "3000:3000"
-    environment:
-      - NEXT_PUBLIC_API_URL=http://backend:8050
-    depends_on:
-      backend:
-        condition: service_started
+    expose:
+      - "3000"
     restart: unless-stopped
 
   backend:
     build:
       context: .
       dockerfile: backend/Dockerfile
-    ports:
-      - "8050:8050"
+    expose:
+      - "8050"
     volumes:
       - ./checkpoints:/app/checkpoints:ro
       - ./data/processed:/app/data/processed:ro
