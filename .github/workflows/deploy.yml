@@ -29,28 +29,28 @@ jobs:
 
             # Clone or pull
             if [ ! -d /opt/zhan ]; then
-              git clone https://github.com/${{ github.repository }}.git /opt/zhan
+              sudo git clone https://github.com/${{ github.repository }}.git /opt/zhan
             fi
             cd /opt/zhan
-            git fetch origin main
-            git reset --hard origin/main
+            sudo git fetch origin main
+            sudo git reset --hard origin/main
 
             # Install Docker if missing
             if ! command -v docker &> /dev/null; then
-              curl -fsSL https://get.docker.com | sh
-              systemctl enable docker
-              systemctl start docker
+              curl -fsSL https://get.docker.com | sudo sh
+              sudo systemctl enable docker
+              sudo systemctl start docker
             fi
 
             # Install docker compose plugin if missing
             if ! docker compose version &> /dev/null; then
-              apt-get update && apt-get install -y docker-compose-plugin
+              sudo apt-get update && sudo apt-get install -y docker-compose-plugin
             fi
 
             # Build and deploy
-            docker compose down --remove-orphans || true
-            docker compose build --no-cache
-            docker compose up -d
+            sudo docker compose down --remove-orphans || true
+            sudo docker compose build --no-cache
+            sudo docker compose up -d
 
             # Health check
             echo "Waiting for services..."
